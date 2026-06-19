@@ -1,22 +1,55 @@
 {
   "expo": {
+    "name": "Bate Pontos",
+    "slug": "bate-pontos",
+    "version": "1.0.0",
+    "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#f4f8ff"
     },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.rafaelsoares.batepontos",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "O app usa sua localização para registrar onde o ponto da jornada foi batido."
+      }
+    },
     "android": {
+      "package": "com.rafaelsoares.batepontos",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#f4f8ff"
-      }
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "POST_NOTIFICATIONS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-asset"
-    ]
+      "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "color": "#0b2f66",
+          "defaultChannel": "jornada"
+        }
+      ]
+    ],
+    "extra": {
+      "supabaseUrl": "${EXPO_PUBLIC_SUPABASE_URL}",
+      "supabaseAnonKey": "${EXPO_PUBLIC_SUPABASE_ANON_KEY}",
+      "eas": {
+        "projectId": "COLE_AQUI_O_PROJECT_ID_DO_EAS"
+      }
+    }
   }
 }
