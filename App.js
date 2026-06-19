@@ -1,28 +1,53 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
-  Button,
+  Image,
   SafeAreaView,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
-  View,
-  ActivityIndicator,
 } from 'react-native';
 
 import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 
-import { supabase } from './src/supabase';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
-const STORAGE_EVENTOS_PENDENTES = '@controle_motorista:eventos_pendentes';
-const STORAGE_JORNADAS_PENDENTES = '@controle_motorista:jornadas_pendentes';
-const STORAGE_JORNADA_LOCAL = '@controle_motorista:jornada_local';
+import { supabase } from './src/lib/supabase';
+
+import LoginScreen from './src/screens/LoginScreen';
+import MotoristaScreen from './src/screens/MotoristaScreen';
+import HistoricoScreen from './src/screens/HistoricoScreen';
+import DetalhesJornadaScreen from './src/screens/DetalhesJornadaScreen';
+import AdminScreen from './src/screens/AdminScreen';
+import ConfiguracoesScreen from './src/screens/ConfiguracoesScreen';
+
+import {
+  inicializarBancoLocal,
+  salvarJornadaLocalSQLite,
+  carregarJornadaLocalSQLite,
+  salvarEventoPendenteSQLite,
+  listarEventosPendentesSQLite,
+  contarEventosPendentesSQLite,
+  limparEventosPendentesSQLite,
+  salvarOperacaoJornadaPendenteSQLite,
+  listarJornadasPendentesSQLite,
+  contarJornadasPendentesSQLite,
+  limparJornadasPendentesSQLite,
+  substituirJornadasPendentesSQLite,
+} from './src/lib/localDb';
+
+
+const Stack = createNativeStackNavigator();
+
+const logo = require('./assets/logo.png');
 
 export default function App() {
   const [session, setSession] = useState(null);
+  const [perfil, setPerfil] = useState(null);
+  const [carregandoPerfil, setCarregandoPerfil] = useState(false);
+
   const [carregando, setCarregando] = useState(true);
   const [registrando, setRegistrando] = useState(false);
 
@@ -38,7 +63,7 @@ export default function App() {
   const [eventos, setEventos] = useState([]);
 
   useEffect(() => {
-    buscarSessao();
+    iniciarApp();
 
     const { data } = supabase.auth.onAuthStateChange((_event, sessionAtual) => {
       setSession(sessionAtual);
@@ -75,9 +100,21 @@ export default function App() {
     };
   }, [session]);
 
+
+  async function iniciarApp() {
+    try {
+    
+      await inicializarBancoLocal();
+      await buscarSessao();
+    } catch (error) {
+      console.log('Erro ao iniciar app:', error);
+      await buscarSessao();
+    }
+  }
+
   async function iniciarDadosDoUsuario() {
-    await carregarEventosPendentes();
-    await carregarJornadasPendentes();
+    await buscarPerfil();
+    await atualizarContadoresPendentes();
     await carregarJornadaLocal();
     await buscarJornadaAberta();
   }
@@ -96,6 +133,28 @@ export default function App() {
 
     setSession(data.session);
     setCarregando(false);
+  }
+
+  async function buscarPerfil() {
+    if (!session?.user) return;
+
+    setCarregandoPerfil(true);
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', session.user.id)
+      .single();
+
+    setCarregandoPerfil(false);
+
+    if (error) {
+      console.log('Erro ao buscar perfil:', error.message);
+      setPerfil(null);
+      return;
+    }
+
+    setPerfil(data);
   }
 
   async function verificarInternet() {
@@ -151,19 +210,26 @@ export default function App() {
     }
   }
 
-  async function salvarJornadaLocal(jornada) {
-    if (!jornada) {
-      await AsyncStorage.removeItem(STORAGE_JORNADA_LOCAL);
-      return;
-    }
+  async function atualizarContadoresPendentes() {
+    const totalEventos = await contarEventosPendentesSQLite();
+    const totalJornadas = await contarJornadasPendentesSQLite();
 
-    await AsyncStorage.setItem(STORAGE_JORNADA_LOCAL, JSON.stringify(jornada));
+    setEventosPendentes(totalEventos);
+    setJornadasPendentes(totalJornadas);
+
+    return {
+      totalEventos,
+      totalJornadas,
+    };
+  }
+
+  async function salvarJornadaLocal(jornada) {
+    await salvarJornadaLocalSQLite(jornada);
   }
 
   async function carregarJornadaLocal() {
     try {
-      const texto = await AsyncStorage.getItem(STORAGE_JORNADA_LOCAL);
-      const jornada = texto ? JSON.parse(texto) : null;
+      const jornada = await carregarJornadaLocalSQLite();
 
       if (jornada && jornada.status === 'aberta') {
         setJornadaAtual(jornada);
@@ -176,135 +242,56 @@ export default function App() {
     }
   }
 
-  async function carregarEventosPendentes() {
-    try {
-      const texto = await AsyncStorage.getItem(STORAGE_EVENTOS_PENDENTES);
-      const lista = texto ? JSON.parse(texto) : [];
-
-      setEventosPendentes(lista.length);
-
-      return lista;
-    } catch (error) {
-      setEventosPendentes(0);
-      return [];
-    }
-  }
-
   async function salvarEventoPendente(evento) {
     try {
-      const listaAtual = await carregarEventosPendentes();
-
-      const jaExiste = listaAtual.some((item) => item.id === evento.id);
-
-      if (jaExiste) {
-        return;
-      }
-
-      const novaLista = [...listaAtual, evento];
-
-      await AsyncStorage.setItem(
-        STORAGE_EVENTOS_PENDENTES,
-        JSON.stringify(novaLista)
-      );
-
-      setEventosPendentes(novaLista.length);
+      await salvarEventoPendenteSQLite(evento);
+      await atualizarContadoresPendentes();
     } catch (error) {
       Alert.alert(
         'Erro local',
-        'Não foi possível salvar o evento pendente no celular.'
+        'Não foi possível salvar o evento pendente no SQLite.'
       );
     }
   }
 
   async function limparEventosPendentes() {
-    await AsyncStorage.removeItem(STORAGE_EVENTOS_PENDENTES);
-    setEventosPendentes(0);
-  }
-
-  async function carregarJornadasPendentes() {
-    try {
-      const texto = await AsyncStorage.getItem(STORAGE_JORNADAS_PENDENTES);
-      const lista = texto ? JSON.parse(texto) : [];
-
-      setJornadasPendentes(lista.length);
-
-      return lista;
-    } catch (error) {
-      setJornadasPendentes(0);
-      return [];
-    }
+    await limparEventosPendentesSQLite();
+    await atualizarContadoresPendentes();
   }
 
   async function salvarOperacaoJornadaPendente(operacao, jornada) {
     try {
-      const listaAtual = await carregarJornadasPendentes();
-
-      let novaLista = [...listaAtual];
-
-      const indiceInsert = novaLista.findIndex(
-        (item) => item.operacao === 'insert' && item.jornada.id === jornada.id
-      );
-
-      const indiceUpdate = novaLista.findIndex(
-        (item) => item.operacao === 'update' && item.jornada.id === jornada.id
-      );
-
-      if (operacao === 'insert') {
-        if (indiceInsert >= 0) {
-          novaLista[indiceInsert] = {
-            operacao: 'insert',
-            jornada,
-          };
-        } else {
-          novaLista.push({
-            operacao: 'insert',
-            jornada,
-          });
-        }
-      }
-
-      if (operacao === 'update') {
-        if (indiceInsert >= 0) {
-          novaLista[indiceInsert] = {
-            operacao: 'insert',
-            jornada,
-          };
-        } else if (indiceUpdate >= 0) {
-          novaLista[indiceUpdate] = {
-            operacao: 'update',
-            jornada,
-          };
-        } else {
-          novaLista.push({
-            operacao: 'update',
-            jornada,
-          });
-        }
-      }
-
-      await AsyncStorage.setItem(
-        STORAGE_JORNADAS_PENDENTES,
-        JSON.stringify(novaLista)
-      );
-
-      setJornadasPendentes(novaLista.length);
+      await salvarOperacaoJornadaPendenteSQLite(operacao, jornada);
+      await atualizarContadoresPendentes();
     } catch (error) {
       Alert.alert(
         'Erro local',
-        'Não foi possível salvar a jornada pendente no celular.'
+        'Não foi possível salvar a jornada pendente no SQLite.'
       );
     }
   }
 
   async function limparJornadasPendentes() {
-    await AsyncStorage.removeItem(STORAGE_JORNADAS_PENDENTES);
-    setJornadasPendentes(0);
+    await limparJornadasPendentesSQLite();
+    await atualizarContadoresPendentes();
+  }
+
+  function montarUpdateJornada(jornada) {
+    return {
+      fim: jornada.fim,
+      status: jornada.status,
+      latitude_fim: jornada.latitude_fim,
+      longitude_fim: jornada.longitude_fim,
+      km_final: jornada.km_final,
+      combustivel_final: jornada.combustivel_final,
+      observacao_veiculo_fim: jornada.observacao_veiculo_fim,
+    };
   }
 
   async function sincronizarJornadasPendentes() {
     if (!session?.user) return false;
 
-    const lista = await carregarJornadasPendentes();
+    const lista = await listarJornadasPendentesSQLite();
 
     if (lista.length === 0) {
       return true;
@@ -329,12 +316,7 @@ export default function App() {
       if (item.operacao === 'update') {
         const { error } = await supabase
           .from('jornadas')
-          .update({
-            fim: item.jornada.fim,
-            status: item.jornada.status,
-            latitude_fim: item.jornada.latitude_fim,
-            longitude_fim: item.jornada.longitude_fim,
-          })
+          .update(montarUpdateJornada(item.jornada))
           .eq('id', item.jornada.id);
 
         if (error) {
@@ -345,12 +327,8 @@ export default function App() {
     }
 
     if (restantes.length > 0) {
-      await AsyncStorage.setItem(
-        STORAGE_JORNADAS_PENDENTES,
-        JSON.stringify(restantes)
-      );
-
-      setJornadasPendentes(restantes.length);
+      await substituirJornadasPendentesSQLite(restantes);
+      await atualizarContadoresPendentes();
 
       return false;
     }
@@ -363,7 +341,7 @@ export default function App() {
   async function sincronizarEventosPendentes() {
     if (!session?.user) return false;
 
-    const lista = await carregarEventosPendentes();
+    const lista = await listarEventosPendentesSQLite();
 
     if (lista.length === 0) {
       return true;
@@ -412,8 +390,7 @@ export default function App() {
       return;
     }
 
-    const jornadasAntes = await carregarJornadasPendentes();
-    const eventosAntes = await carregarEventosPendentes();
+    const contadoresAntes = await atualizarContadoresPendentes();
 
     const jornadasOk = await sincronizarJornadasPendentes();
 
@@ -428,11 +405,13 @@ export default function App() {
     }
 
     const tinhaPendencia =
-      jornadasAntes.length > 0 || eventosAntes.length > 0;
+      contadoresAntes.totalEventos > 0 || contadoresAntes.totalJornadas > 0;
 
     if (mostrarAlerta && tinhaPendencia && jornadasOk && eventosOk) {
       Alert.alert('Sincronizado', 'Dados enviados para o Supabase.');
     }
+
+    await atualizarContadoresPendentes();
   }
 
   async function cadastrar() {
@@ -493,8 +472,10 @@ export default function App() {
   }
 
   async function sair() {
+    await cancelarNotificacoesJornada();
     await supabase.auth.signOut();
 
+    setPerfil(null);
     setJornadaAtual(null);
     setEventos([]);
   }
@@ -539,9 +520,9 @@ export default function App() {
       return;
     }
 
-    const pendentes = await carregarJornadasPendentes();
+    const contadores = await atualizarContadoresPendentes();
 
-    if (pendentes.length === 0) {
+    if (contadores.totalJornadas === 0) {
       setJornadaAtual(null);
       setEventos([]);
       await salvarJornadaLocal(null);
@@ -621,13 +602,21 @@ export default function App() {
     }
 
     setEventos((eventosAtuais) =>
-      eventosAtuais.map((item) =>
-        item.id === evento.id ? data : item
-      )
+      eventosAtuais.map((item) => (item.id === evento.id ? data : item))
     );
   }
 
-  async function iniciarJornada() {
+  function normalizarNumero(valor) {
+    if (valor === null || valor === undefined || valor === '') {
+      return null;
+    }
+
+    const numero = Number(String(valor).replace(',', '.'));
+
+    return Number.isNaN(numero) ? null : numero;
+  }
+
+  async function iniciarJornada(dadosVeiculo = {}) {
     if (!session?.user) return;
 
     if (jornadaAtual && jornadaAtual.status === 'aberta') {
@@ -652,6 +641,15 @@ export default function App() {
       longitude_inicio: local.longitude,
       latitude_fim: null,
       longitude_fim: null,
+      veiculo: dadosVeiculo.veiculo?.trim() || null,
+      placa: dadosVeiculo.placa?.trim()?.toUpperCase() || null,
+      km_inicial: normalizarNumero(dadosVeiculo.kmInicial),
+      km_final: null,
+      combustivel_inicial: dadosVeiculo.combustivelInicial?.trim() || null,
+      combustivel_final: null,
+      observacao_veiculo_inicio:
+        dadosVeiculo.observacaoVeiculoInicio?.trim() || null,
+      observacao_veiculo_fim: null,
     };
 
     setJornadaAtual(novaJornada);
@@ -673,9 +671,7 @@ export default function App() {
       return;
     }
 
-    const { error } = await supabase
-      .from('jornadas')
-      .insert(novaJornada);
+    const { error } = await supabase.from('jornadas').insert(novaJornada);
 
     if (error) {
       await salvarOperacaoJornadaPendente('insert', novaJornada);
@@ -700,29 +696,30 @@ export default function App() {
 
   async function pausar() {
     if (!jornadaAtual) return;
-
     await registrarEvento('pausa', jornadaAtual.id);
   }
 
   async function retomar() {
     if (!jornadaAtual) return;
-
     await registrarEvento('retorno', jornadaAtual.id);
   }
 
-  async function iniciarViagem() {
+  async function iniciarViagem(observacao = null) {
     if (!jornadaAtual) return;
-
-    await registrarEvento('inicio_viagem', jornadaAtual.id);
+    await registrarEvento('inicio_viagem', jornadaAtual.id, observacao);
   }
 
-  async function finalizarViagem() {
+  async function finalizarViagem(observacao = null) {
     if (!jornadaAtual) return;
-
-    await registrarEvento('fim_viagem', jornadaAtual.id);
+    await registrarEvento('fim_viagem', jornadaAtual.id, observacao);
   }
 
-  async function encerrarJornada() {
+  async function registrarOcorrencia(observacao = null) {
+    if (!jornadaAtual) return;
+    await registrarEvento('observacao', jornadaAtual.id, observacao);
+  }
+
+  async function encerrarJornada(dadosEncerramento = {}) {
     if (!jornadaAtual || !session?.user) return;
 
     setRegistrando(true);
@@ -735,6 +732,10 @@ export default function App() {
       status: 'encerrada',
       latitude_fim: local.latitude,
       longitude_fim: local.longitude,
+      km_final: normalizarNumero(dadosEncerramento.kmFinal),
+      combustivel_final: dadosEncerramento.combustivelFinal?.trim() || null,
+      observacao_veiculo_fim:
+        dadosEncerramento.observacaoVeiculoFim?.trim() || null,
     };
 
     await registrarEvento('fim_jornada', jornadaAtual.id);
@@ -748,6 +749,7 @@ export default function App() {
       setJornadaAtual(null);
       setEventos([]);
       setRegistrando(false);
+      await cancelarNotificacoesJornada();
 
       Alert.alert(
         'Jornada encerrada offline',
@@ -759,22 +761,17 @@ export default function App() {
 
     const { error } = await supabase
       .from('jornadas')
-      .update({
-        fim: jornadaEncerrada.fim,
-        status: 'encerrada',
-        latitude_fim: jornadaEncerrada.latitude_fim,
-        longitude_fim: jornadaEncerrada.longitude_fim,
-      })
+      .update(montarUpdateJornada(jornadaEncerrada))
       .eq('id', jornadaEncerrada.id);
 
     if (error) {
       await salvarOperacaoJornadaPendente('update', jornadaEncerrada);
-
       await salvarJornadaLocal(null);
 
       setJornadaAtual(null);
       setEventos([]);
       setRegistrando(false);
+      await cancelarNotificacoesJornada();
 
       Alert.alert(
         'Jornada encerrada localmente',
@@ -789,278 +786,167 @@ export default function App() {
     setJornadaAtual(null);
     setEventos([]);
     setRegistrando(false);
+    await cancelarNotificacoesJornada();
 
     Alert.alert('Jornada encerrada', 'Horário final registrado com sucesso.');
   }
 
-  function formatarData(dataISO) {
-    if (!dataISO) return '-';
+  function TelaCarregamento({ texto }) {
+    return (
+      <SafeAreaView style={styles.loadingContainer}>
+        <Image source={logo} style={styles.loadingLogo} resizeMode="contain" />
 
-    return new Date(dataISO).toLocaleString('pt-BR');
-  }
+        <ActivityIndicator size="large" color="#0066cc" />
 
-  function formatarTipoEvento(tipo) {
-    const nomes = {
-      inicio_jornada: 'Início da jornada',
-      inicio_viagem: 'Início da viagem',
-      fim_viagem: 'Fim da viagem',
-      pausa: 'Pausa',
-      retorno: 'Retorno',
-      fim_jornada: 'Fim da jornada',
-      observacao: 'Observação',
-    };
-
-    return nomes[tipo] || tipo;
+        <Text style={styles.carregandoTexto}>{texto}</Text>
+      </SafeAreaView>
+    );
   }
 
   if (carregando) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <ActivityIndicator size="large" />
-        <Text style={styles.carregandoTexto}>Carregando...</Text>
-      </SafeAreaView>
-    );
+    return <TelaCarregamento texto="Carregando..." />;
   }
 
   if (!session) {
     return (
-      <SafeAreaView style={styles.container}>
-        <Text style={styles.titulo}>Controle do Motorista</Text>
-
-        <TextInput
-          style={styles.input}
-          placeholder="Nome"
-          value={nome}
-          onChangeText={setNome}
-        />
-
-        <TextInput
-          style={styles.input}
-          placeholder="E-mail"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
-
-        <TextInput
-          style={styles.input}
-          placeholder="Senha"
-          value={senha}
-          onChangeText={setSenha}
-          secureTextEntry
-        />
-
-        <View style={styles.espaco}>
-          <Button title="Entrar" onPress={login} />
-        </View>
-
-        <View style={styles.espaco}>
-          <Button title="Cadastrar motorista" onPress={cadastrar} />
-        </View>
-      </SafeAreaView>
+      <LoginScreen
+        email={email}
+        setEmail={setEmail}
+        senha={senha}
+        setSenha={setSenha}
+        nome={nome}
+        setNome={setNome}
+        login={login}
+        cadastrar={cadastrar}
+        carregando={carregando}
+      />
     );
   }
 
+  if (session && carregandoPerfil) {
+    return <TelaCarregamento texto="Carregando perfil..." />;
+  }
+
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView>
-        <Text style={styles.titulo}>Controle de Jornada</Text>
-
-        <View style={styles.statusConexao}>
-          <Text style={online ? styles.statusOnline : styles.statusOffline}>
-            {online ? 'Online' : 'Offline'}
-          </Text>
-
-          {jornadasPendentes > 0 && (
-            <Text style={styles.statusPendente}>
-              {jornadasPendentes} jornada(s) aguardando sincronização
-            </Text>
-          )}
-
-          {eventosPendentes > 0 && (
-            <Text style={styles.statusPendente}>
-              {eventosPendentes} evento(s) aguardando sincronização
-            </Text>
-          )}
-        </View>
-
-        <Text style={styles.usuario}>Usuário: {session.user.email}</Text>
-
-        {!jornadaAtual ? (
-          <View style={styles.card}>
-            <Text style={styles.subtitulo}>Nenhuma jornada aberta</Text>
-
-            <Button
-              title={registrando ? 'Iniciando...' : 'Iniciar jornada'}
-              onPress={iniciarJornada}
-              disabled={registrando}
-            />
-          </View>
+    <NavigationContainer>
+      <Stack.Navigator>
+        {perfil?.tipo === 'admin' ? (
+          <Stack.Screen name="Admin" options={{ title: 'Admin' }}>
+            {(props) => (
+              <AdminScreen
+                {...props}
+                session={session}
+                perfil={perfil}
+                sair={sair}
+              />
+            )}
+          </Stack.Screen>
         ) : (
-          <View style={styles.card}>
-            <Text style={styles.subtitulo}>Jornada aberta</Text>
-
-            <Text>Início: {formatarData(jornadaAtual.inicio)}</Text>
-
-            <View style={styles.espaco}>
-              <Button
-                title={registrando ? 'Registrando...' : 'Iniciar viagem'}
-                onPress={iniciarViagem}
-                disabled={registrando}
+          <Stack.Screen name="Motorista" options={{ title: 'Motorista' }}>
+            {(props) => (
+              <MotoristaScreen
+                {...props}
+                session={session}
+                perfil={perfil}
+                online={online}
+                jornadasPendentes={jornadasPendentes}
+                eventosPendentes={eventosPendentes}
+                jornadaAtual={jornadaAtual}
+                eventos={eventos}
+                registrando={registrando}
+                iniciarJornada={iniciarJornada}
+                iniciarViagem={iniciarViagem}
+                finalizarViagem={finalizarViagem}
+                registrarOcorrencia={registrarOcorrencia}
+                pausar={pausar}
+                retomar={retomar}
+                encerrarJornada={encerrarJornada}
+                sincronizarTudo={sincronizarTudo}
+                sair={sair}
               />
-            </View>
-
-            <View style={styles.espaco}>
-              <Button
-                title={registrando ? 'Registrando...' : 'Finalizar viagem'}
-                onPress={finalizarViagem}
-                disabled={registrando}
-              />
-            </View>
-
-            <View style={styles.espaco}>
-              <Button
-                title={registrando ? 'Registrando...' : 'Pausar'}
-                onPress={pausar}
-                disabled={registrando}
-              />
-            </View>
-
-            <View style={styles.espaco}>
-              <Button
-                title={registrando ? 'Registrando...' : 'Retomar'}
-                onPress={retomar}
-                disabled={registrando}
-              />
-            </View>
-
-            <View style={styles.espaco}>
-              <Button
-                title={registrando ? 'Encerrando...' : 'Encerrar jornada'}
-                color="#b00020"
-                onPress={encerrarJornada}
-                disabled={registrando}
-              />
-            </View>
-          </View>
+            )}
+          </Stack.Screen>
         )}
 
-        <View style={styles.card}>
-          <Text style={styles.subtitulo}>Eventos do dia</Text>
+        <Stack.Screen name="MotoristaAdmin" options={{ title: 'Motorista' }}>
+          {(props) => (
+            <MotoristaScreen
+              {...props}
+              session={session}
+              perfil={perfil}
+              online={online}
+              jornadasPendentes={jornadasPendentes}
+              eventosPendentes={eventosPendentes}
+              jornadaAtual={jornadaAtual}
+              eventos={eventos}
+              registrando={registrando}
+              iniciarJornada={iniciarJornada}
+              iniciarViagem={iniciarViagem}
+              finalizarViagem={finalizarViagem}
+              registrarOcorrencia={registrarOcorrencia}
+              pausar={pausar}
+              retomar={retomar}
+              encerrarJornada={encerrarJornada}
+              sincronizarTudo={sincronizarTudo}
+              sair={sair}
+            />
+          )}
+        </Stack.Screen>
 
-          {eventos.length === 0 && <Text>Nenhum evento registrado.</Text>}
+        <Stack.Screen name="Historico" options={{ title: 'Histórico' }}>
+          {(props) => (
+            <HistoricoScreen
+              {...props}
+              session={session}
+            />
+          )}
+        </Stack.Screen>
 
-          {eventos.map((evento) => (
-            <View key={evento.id} style={styles.evento}>
-              <Text style={styles.eventoTipo}>
-                {formatarTipoEvento(evento.tipo)}{' '}
-                {evento.pendente ? '(pendente)' : ''}
-              </Text>
+        <Stack.Screen
+          name="DetalhesJornada"
+          options={{ title: 'Detalhes da Jornada' }}
+        >
+          {(props) => <DetalhesJornadaScreen {...props} />}
+        </Stack.Screen>
 
-              <Text>{formatarData(evento.horario)}</Text>
-
-              {evento.latitude && evento.longitude && (
-                <Text>
-                  Local: {evento.latitude}, {evento.longitude}
-                </Text>
-              )}
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.espaco}>
-          <Button
-            title="Sincronizar agora"
-            onPress={() => sincronizarTudo(true)}
-          />
-        </View>
-
-        <View style={styles.espaco}>
-          <Button title="Sair" onPress={sair} />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+        <Stack.Screen name="Configuracoes" options={{ title: 'Configurações' }}>
+          {(props) => (
+            <ConfiguracoesScreen
+              {...props}
+              session={session}
+              perfil={perfil}
+              online={online}
+              jornadasPendentes={jornadasPendentes}
+              eventosPendentes={eventosPendentes}
+              jornadaAtual={jornadaAtual}
+              sincronizarTudo={sincronizarTudo}
+              sair={sair}
+            />
+          )}
+        </Stack.Screen>
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  loadingContainer: {
     flex: 1,
-    padding: 20,
-    backgroundColor: '#f4f4f4',
+    padding: 24,
+    backgroundColor: '#f4f8ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingLogo: {
+    width: '100%',
+    height: 170,
+    marginBottom: 24,
   },
   carregandoTexto: {
-    marginTop: 10,
+    marginTop: 12,
     textAlign: 'center',
-  },
-  titulo: {
-    fontSize: 26,
+    color: '#0b2f66',
     fontWeight: 'bold',
-    marginBottom: 20,
-    marginTop: 20,
-    textAlign: 'center',
-  },
-  subtitulo: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  usuario: {
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  statusConexao: {
-    backgroundColor: '#fff',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  statusOnline: {
-    textAlign: 'center',
-    fontWeight: 'bold',
-    color: '#008000',
-  },
-  statusOffline: {
-    textAlign: 'center',
-    fontWeight: 'bold',
-    color: '#b00020',
-  },
-  statusPendente: {
-    textAlign: 'center',
-    fontWeight: 'bold',
-    marginTop: 4,
-    color: '#b26a00',
-  },
-  input: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  espaco: {
-    marginTop: 10,
-  },
-  evento: {
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    paddingTop: 10,
-    marginTop: 10,
-  },
-  eventoTipo: {
-    fontWeight: 'bold',
-    textTransform: 'uppercase',
+    fontSize: 16,
   },
 });
