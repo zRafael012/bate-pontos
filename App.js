@@ -7,10 +7,8 @@ import {
   StyleSheet,
   Text,
 } from 'react-native';
-
 import * as Location from 'expo-location';
 import NetInfo from '@react-native-community/netinfo';
-
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
@@ -38,27 +36,34 @@ import {
   substituirJornadasPendentesSQLite,
 } from './src/lib/localDb';
 
+import { COLORS } from './src/constants/colors';
+import { EVENTO_TIPOS } from './src/constants/eventoTipos';
+import {
+  JORNADA_OPERACOES_PENDENTES,
+  JORNADA_STATUS,
+} from './src/constants/jornadaStatus';
+import { gerarUUID } from './src/utils/idUtils';
+import { normalizarNumero } from './src/utils/numberUtils';
 
 const Stack = createNativeStackNavigator();
-
 const logo = require('./assets/logo.png');
+
+async function cancelarNotificacoesJornada() {
+  return true;
+}
 
 export default function App() {
   const [session, setSession] = useState(null);
   const [perfil, setPerfil] = useState(null);
   const [carregandoPerfil, setCarregandoPerfil] = useState(false);
-
   const [carregando, setCarregando] = useState(true);
   const [registrando, setRegistrando] = useState(false);
-
   const [online, setOnline] = useState(true);
   const [eventosPendentes, setEventosPendentes] = useState(0);
   const [jornadasPendentes, setJornadasPendentes] = useState(0);
-
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [nome, setNome] = useState('');
-
   const [jornadaAtual, setJornadaAtual] = useState(null);
   const [eventos, setEventos] = useState([]);
 
@@ -100,10 +105,8 @@ export default function App() {
     };
   }, [session]);
 
-
   async function iniciarApp() {
     try {
-    
       await inicializarBancoLocal();
       await buscarSessao();
     } catch (error) {
@@ -117,15 +120,6 @@ export default function App() {
     await atualizarContadoresPendentes();
     await carregarJornadaLocal();
     await buscarJornadaAberta();
-  }
-
-  function gerarUUID() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-      const r = (Math.random() * 16) | 0;
-      const v = c === 'x' ? r : (r & 0x3) | 0x8;
-
-      return v.toString(16);
-    });
   }
 
   async function buscarSessao() {
@@ -231,7 +225,7 @@ export default function App() {
     try {
       const jornada = await carregarJornadaLocalSQLite();
 
-      if (jornada && jornada.status === 'aberta') {
+      if (jornada && jornada.status === JORNADA_STATUS.ABERTA) {
         setJornadaAtual(jornada);
         return jornada;
       }
@@ -300,7 +294,7 @@ export default function App() {
     const restantes = [];
 
     for (const item of lista) {
-      if (item.operacao === 'insert') {
+      if (item.operacao === JORNADA_OPERACOES_PENDENTES.INSERT) {
         const { error } = await supabase
           .from('jornadas')
           .upsert(item.jornada, {
@@ -313,7 +307,7 @@ export default function App() {
         }
       }
 
-      if (item.operacao === 'update') {
+      if (item.operacao === JORNADA_OPERACOES_PENDENTES.UPDATE) {
         const { error } = await supabase
           .from('jornadas')
           .update(montarUpdateJornada(item.jornada))
@@ -329,12 +323,10 @@ export default function App() {
     if (restantes.length > 0) {
       await substituirJornadasPendentesSQLite(restantes);
       await atualizarContadoresPendentes();
-
       return false;
     }
 
     await limparJornadasPendentes();
-
     return true;
   }
 
@@ -370,7 +362,6 @@ export default function App() {
     }
 
     await limparEventosPendentes();
-
     return true;
   }
 
@@ -474,7 +465,6 @@ export default function App() {
   async function sair() {
     await cancelarNotificacoesJornada();
     await supabase.auth.signOut();
-
     setPerfil(null);
     setJornadaAtual(null);
     setEventos([]);
@@ -484,7 +474,6 @@ export default function App() {
     if (!session?.user) return;
 
     const jornadaLocal = await carregarJornadaLocal();
-
     const temInternet = await verificarInternet();
 
     if (!temInternet) {
@@ -497,7 +486,7 @@ export default function App() {
       .from('jornadas')
       .select('*')
       .eq('motorista_id', session.user.id)
-      .eq('status', 'aberta')
+      .eq('status', JORNADA_STATUS.ABERTA)
       .order('inicio', { ascending: false })
       .limit(1);
 
@@ -606,20 +595,10 @@ export default function App() {
     );
   }
 
-  function normalizarNumero(valor) {
-    if (valor === null || valor === undefined || valor === '') {
-      return null;
-    }
-
-    const numero = Number(String(valor).replace(',', '.'));
-
-    return Number.isNaN(numero) ? null : numero;
-  }
-
   async function iniciarJornada(dadosVeiculo = {}) {
     if (!session?.user) return;
 
-    if (jornadaAtual && jornadaAtual.status === 'aberta') {
+    if (jornadaAtual && jornadaAtual.status === JORNADA_STATUS.ABERTA) {
       Alert.alert(
         'Jornada já aberta',
         'Você precisa encerrar a jornada atual antes de iniciar outra.'
@@ -636,7 +615,7 @@ export default function App() {
       motorista_id: session.user.id,
       inicio: new Date().toISOString(),
       fim: null,
-      status: 'aberta',
+      status: JORNADA_STATUS.ABERTA,
       latitude_inicio: local.latitude,
       longitude_inicio: local.longitude,
       latitude_fim: null,
@@ -658,37 +637,38 @@ export default function App() {
     const temInternet = await verificarInternet();
 
     if (!temInternet) {
-      await salvarOperacaoJornadaPendente('insert', novaJornada);
-      await registrarEvento('inicio_jornada', novaJornada.id);
-
+      await salvarOperacaoJornadaPendente(
+        JORNADA_OPERACOES_PENDENTES.INSERT,
+        novaJornada
+      );
+      await registrarEvento(EVENTO_TIPOS.INICIO_JORNADA, novaJornada.id);
       setRegistrando(false);
 
       Alert.alert(
         'Jornada iniciada offline',
         'Ela será enviada para o Supabase quando a internet voltar.'
       );
-
       return;
     }
 
     const { error } = await supabase.from('jornadas').insert(novaJornada);
 
     if (error) {
-      await salvarOperacaoJornadaPendente('insert', novaJornada);
-      await registrarEvento('inicio_jornada', novaJornada.id);
-
+      await salvarOperacaoJornadaPendente(
+        JORNADA_OPERACOES_PENDENTES.INSERT,
+        novaJornada
+      );
+      await registrarEvento(EVENTO_TIPOS.INICIO_JORNADA, novaJornada.id);
       setRegistrando(false);
 
       Alert.alert(
         'Jornada salva localmente',
         'Não foi possível enviar agora. O app tentará sincronizar depois.'
       );
-
       return;
     }
 
-    await registrarEvento('inicio_jornada', novaJornada.id);
-
+    await registrarEvento(EVENTO_TIPOS.INICIO_JORNADA, novaJornada.id);
     setRegistrando(false);
 
     Alert.alert('Jornada iniciada', 'Horário registrado com sucesso.');
@@ -696,27 +676,36 @@ export default function App() {
 
   async function pausar() {
     if (!jornadaAtual) return;
-    await registrarEvento('pausa', jornadaAtual.id);
+
+    await registrarEvento(EVENTO_TIPOS.PAUSA, jornadaAtual.id);
   }
 
   async function retomar() {
     if (!jornadaAtual) return;
-    await registrarEvento('retorno', jornadaAtual.id);
+
+    await registrarEvento(EVENTO_TIPOS.RETORNO, jornadaAtual.id);
   }
 
   async function iniciarViagem(observacao = null) {
     if (!jornadaAtual) return;
-    await registrarEvento('inicio_viagem', jornadaAtual.id, observacao);
+
+    await registrarEvento(
+      EVENTO_TIPOS.INICIO_VIAGEM,
+      jornadaAtual.id,
+      observacao
+    );
   }
 
   async function finalizarViagem(observacao = null) {
     if (!jornadaAtual) return;
-    await registrarEvento('fim_viagem', jornadaAtual.id, observacao);
+
+    await registrarEvento(EVENTO_TIPOS.FIM_VIAGEM, jornadaAtual.id, observacao);
   }
 
   async function registrarOcorrencia(observacao = null) {
     if (!jornadaAtual) return;
-    await registrarEvento('observacao', jornadaAtual.id, observacao);
+
+    await registrarEvento(EVENTO_TIPOS.OBSERVACAO, jornadaAtual.id, observacao);
   }
 
   async function encerrarJornada(dadosEncerramento = {}) {
@@ -729,7 +718,7 @@ export default function App() {
     const jornadaEncerrada = {
       ...jornadaAtual,
       fim: new Date().toISOString(),
-      status: 'encerrada',
+      status: JORNADA_STATUS.ENCERRADA,
       latitude_fim: local.latitude,
       longitude_fim: local.longitude,
       km_final: normalizarNumero(dadosEncerramento.kmFinal),
@@ -738,14 +727,16 @@ export default function App() {
         dadosEncerramento.observacaoVeiculoFim?.trim() || null,
     };
 
-    await registrarEvento('fim_jornada', jornadaAtual.id);
+    await registrarEvento(EVENTO_TIPOS.FIM_JORNADA, jornadaAtual.id);
 
     const temInternet = await verificarInternet();
 
     if (!temInternet) {
-      await salvarOperacaoJornadaPendente('update', jornadaEncerrada);
+      await salvarOperacaoJornadaPendente(
+        JORNADA_OPERACOES_PENDENTES.UPDATE,
+        jornadaEncerrada
+      );
       await salvarJornadaLocal(null);
-
       setJornadaAtual(null);
       setEventos([]);
       setRegistrando(false);
@@ -755,7 +746,6 @@ export default function App() {
         'Jornada encerrada offline',
         'Ela será atualizada no Supabase quando a internet voltar.'
       );
-
       return;
     }
 
@@ -765,9 +755,11 @@ export default function App() {
       .eq('id', jornadaEncerrada.id);
 
     if (error) {
-      await salvarOperacaoJornadaPendente('update', jornadaEncerrada);
+      await salvarOperacaoJornadaPendente(
+        JORNADA_OPERACOES_PENDENTES.UPDATE,
+        jornadaEncerrada
+      );
       await salvarJornadaLocal(null);
-
       setJornadaAtual(null);
       setEventos([]);
       setRegistrando(false);
@@ -777,12 +769,10 @@ export default function App() {
         'Jornada encerrada localmente',
         'Não foi possível enviar agora. O app tentará sincronizar depois.'
       );
-
       return;
     }
 
     await salvarJornadaLocal(null);
-
     setJornadaAtual(null);
     setEventos([]);
     setRegistrando(false);
@@ -795,9 +785,7 @@ export default function App() {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <Image source={logo} style={styles.loadingLogo} resizeMode="contain" />
-
-        <ActivityIndicator size="large" color="#0066cc" />
-
+        <ActivityIndicator size="large" color={COLORS.primaryLight} />
         <Text style={styles.carregandoTexto}>{texto}</Text>
       </SafeAreaView>
     );
@@ -894,12 +882,7 @@ export default function App() {
         </Stack.Screen>
 
         <Stack.Screen name="Historico" options={{ title: 'Histórico' }}>
-          {(props) => (
-            <HistoricoScreen
-              {...props}
-              session={session}
-            />
-          )}
+          {(props) => <HistoricoScreen {...props} session={session} />}
         </Stack.Screen>
 
         <Stack.Screen
@@ -933,7 +916,7 @@ const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1,
     padding: 24,
-    backgroundColor: '#f4f8ff',
+    backgroundColor: COLORS.background,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -945,7 +928,7 @@ const styles = StyleSheet.create({
   carregandoTexto: {
     marginTop: 12,
     textAlign: 'center',
-    color: '#0b2f66',
+    color: COLORS.primary,
     fontWeight: 'bold',
     fontSize: 16,
   },
